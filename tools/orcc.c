@@ -14,6 +14,7 @@
 
 static char * read_file (const char *filename);
 void output_code (OrcProgram *p, FILE *output);
+void output_code_static (OrcProgram *p, FILE *output);
 void output_code_header (OrcProgram *p, FILE *output);
 void output_code_test (OrcProgram *p, FILE *output);
 void output_code_backup (OrcProgram *p, FILE *output);
@@ -39,7 +40,7 @@ int use_internal = FALSE;
 
 const char *init_function = NULL;
 
-char *target = "sse";
+char *target = "neon";
 
 #define ORC_VERSION(a,b,c,d) ((a)*1000000 + (b)*10000 + (c)*100 + (d))
 #define REQUIRE(a,b,c,d) do { \
@@ -53,7 +54,8 @@ enum {
   MODE_IMPL,
   MODE_HEADER,
   MODE_TEST,
-  MODE_ASSEMBLY
+  MODE_ASSEMBLY,
+  MODE_STATIC_IMPL
 };
 int mode = MODE_IMPL;
 
@@ -69,6 +71,7 @@ void help (void)
   printf("  -v, --verbose           Output more information\n");
   printf("  -o, --output FILE       Write output to FILE\n");
   printf("  --implementation        Produce C code implementing functions\n");
+  printf("  --static-implementation Produce static C code with inline assembly implementing functions\n");
   printf("  --header                Produce C header for functions\n");
   printf("  --test                  Produce test code for functions\n");
   printf("  --assembly              Produce assembly code for functions\n");
@@ -107,6 +110,8 @@ main (int argc, char *argv[])
       mode = MODE_HEADER;
     } else if (strcmp(argv[i], "--implementation") == 0) {
       mode = MODE_IMPL;
+    } else if (strcmp(argv[i], "--static-implementation") == 0) {
+      mode = MODE_STATIC_IMPL;
     } else if (strcmp(argv[i], "--test") == 0) {
       mode = MODE_TEST;
     } else if (strcmp(argv[i], "--assembly") == 0) {
@@ -291,6 +296,37 @@ main (int argc, char *argv[])
     fprintf(output, "\n");
     for(i=0;i<n;i++){
       output_code (programs[i], output);
+    }
+    fprintf(output, "\n");
+    if (init_function) {
+      output_init_function (output);
+      fprintf(output, "\n");
+    }
+  } else if (mode == MODE_STATIC_IMPL) {
+    fprintf(output, "#ifdef HAVE_CONFIG_H\n");
+    fprintf(output, "#include \"config.h\"\n");
+    fprintf(output, "#endif\n");
+    if (include_file) {
+      fprintf(output, "#include <%s>\n", include_file);
+    }
+    fprintf(output, "\n");
+    fprintf(output, "%s", orc_target_c_get_typedefs ());
+    fprintf(output, "\n");
+    fprintf(output, "#ifndef DISABLE_ORC\n");
+    fprintf(output, "#include <orc/orc.h>\n");
+    fprintf(output, "#endif\n");
+    for(i=0;i<n;i++){
+      output_code_header (programs[i], output);
+    }
+    if (init_function) {
+      fprintf(output, "\n");
+      fprintf(output, "void %s (void);\n", init_function);
+    }
+    fprintf(output, "\n");
+    fprintf(output, "%s", orc_target_get_asm_preamble ("c"));
+    fprintf(output, "\n");
+    for(i=0;i<n;i++){
+      output_code_static (programs[i], output);
     }
     fprintf(output, "\n");
     if (init_function) {
@@ -1481,6 +1517,44 @@ output_code_assembly (OrcProgram *p, FILE *output)
   }
   fprintf(output, "\n");
 
+}
+
+void
+output_code_static (OrcProgram *p, FILE *output)
+{
+  fprintf(output, "\n");
+  fprintf(output, "/* %s (static implementation) */\n", p->name);
+  {
+    OrcCompileResult result;
+    OrcTarget *t = orc_target_get_by_name(target);
+
+    result = orc_program_compile_full (p, t,
+        orc_target_get_default_flags (t));
+    if (ORC_COMPILE_RESULT_IS_SUCCESSFUL(result)) {
+      // Get assembly code
+      char * asm_code = orc_program_get_asm_code (p);
+      
+      // Emit inline assembly prologue
+      fprintf(output, "asm(\"\\\n");
+      
+      // Loop over every line and emit inline assembly
+      {
+        char * asm_code_iter = strtok(asm_code, "\n");
+        while(asm_code_iter != NULL) {
+          fprintf(output, "%s        \\n\\\n", asm_code_iter );
+          asm_code_iter = strtok(NULL, "\n");
+        }
+      }
+      
+      // Emit inline assembly epilogue
+      fprintf(output, "\");\n");
+    } else {
+      // No assembly implementation exists, so output backup C code
+      printf("Failed to compile assembly for '%s', falling back to backup C code\n", p->name);
+      output_code_backup (p, output);
+    }
+  }
+  fprintf(output, "\n");
 }
 
 static const char *

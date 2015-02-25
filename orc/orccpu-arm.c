@@ -45,6 +45,16 @@
 #include <linux/auxvec.h>
 #endif
 
+// iOS detection
+#ifndef IOS
+#ifdef __APPLE__
+  #include "TargetConditionals.h"
+  #ifdef TARGET_OS_IPHONE
+  #define IOS
+  #endif
+#endif
+#endif
+
 /***** arm *****/
 
 #ifdef __arm__
@@ -216,6 +226,18 @@ orc_arm_get_cpu_flags (void)
     /* On ARM, /proc/self/auxv might not be accessible.
      * Fall back to /proc/cpuinfo */
     neon_flags = orc_cpu_arm_getflags_cpuinfo ();
+  }
+#endif
+#ifdef IOS
+  // Check for NEON, though virtually every device has support for this since armv6
+  {
+    size_t length = sizeof(neon_flags);
+    if (sysctlbyname("hw.optional.neon", &neon_flags, &length, NULL, 0) != 0) {
+      neon_flags = 0;
+    }
+    if (!neon_flags) {
+      ORC_WARNING("iOS device does not have support for NEON. It is likely that performance will suffer as a result.");
+    }
   }
 #endif
 

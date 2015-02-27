@@ -1551,6 +1551,9 @@ output_code_static (OrcProgram *p, FILE *output)
     } else {
       // No assembly implementation exists, so output backup C code
       printf("Failed to compile assembly for '%s', falling back to backup C code\n", p->name);
+      {
+        output_code_no_orc (p, output);
+      }
     }
   }
   fprintf(output, "\n");

@@ -94,7 +94,7 @@ struct _OrcCompiler {
   int error;
   char *error_msg;
   OrcCompileResult result;
-
+  
   int valid_regs[ORC_N_REGS];
   int save_regs[ORC_N_REGS];
   int used_regs[ORC_N_REGS];

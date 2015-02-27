@@ -91,6 +91,8 @@ struct _OrcProgram {
 
   OrcCode *orccode;
 
+  int inline_assembly;
+
   /* Hide this here.  Belongs in a Parser object */
   char *init_function;
   char *error_msg;

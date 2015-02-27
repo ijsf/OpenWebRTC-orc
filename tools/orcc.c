@@ -1522,6 +1522,8 @@ output_code_assembly (OrcProgram *p, FILE *output)
 void
 output_code_static (OrcProgram *p, FILE *output)
 {
+  p->inline_assembly = 1;
+  
   fprintf(output, "\n");
   fprintf(output, "/* %s (static implementation) */\n", p->name);
   {

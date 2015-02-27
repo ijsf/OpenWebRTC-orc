@@ -37,7 +37,9 @@ orc_neon_emit_prologue (OrcCompiler *compiler)
   orc_uint32 vregs = 0;
   int i;
 
-  orc_compiler_append_code(compiler,".global %s\n", compiler->program->name);
+  if(!compiler->program->inline_assembly) {
+    orc_compiler_append_code(compiler,".global %s\n", compiler->program->name);
+  }
   orc_compiler_append_code(compiler,"%s:\n", compiler->program->name);
 
   for(i=0;i<16;i++){

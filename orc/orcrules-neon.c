@@ -2261,7 +2261,7 @@ orc_neon_rule_splatw3q (OrcCompiler *p, void *user, OrcInstruction *insn)
   int label = 20;
 
   orc_arm_add_fixup (p, label, 1);
-  ORC_ASM_CODE(p,"  vldr %s, .L%s%d+%d\n",
+  ORC_ASM_CODE(p,"  vldr %s, L%s%d+%d\n",
       orc_neon_reg_name (p->tmpreg), p->program->name, label, offset);
   code = 0xed9f0b00;
   code |= (p->tmpreg&0xf) << 12;

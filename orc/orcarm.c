@@ -171,7 +171,7 @@ orc_arm_emit_label (OrcCompiler *compiler, int label)
 {
   ORC_ASSERT (label < ORC_N_LABELS);
 
-  ORC_ASM_CODE(compiler,".L%s%d:\n", compiler->program->name, label);
+  ORC_ASM_CODE(compiler,"L%s%d:\n", compiler->program->name, label);
 
   compiler->labels[label] = compiler->codeptr;
 }
@@ -250,7 +250,7 @@ orc_arm_emit_branch (OrcCompiler *compiler, int cond, int label)
   orc_arm_add_fixup (compiler, label, 0);
   orc_arm_emit (compiler, code);
 
-  ORC_ASM_CODE(compiler,"  b%s .L%s%d\n", orc_arm_cond_name(cond), compiler->program->name, label);
+  ORC_ASM_CODE(compiler,"  b%s L%s%d\n", orc_arm_cond_name(cond), compiler->program->name, label);
 }
 
 void

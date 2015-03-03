@@ -71,6 +71,8 @@ struct _OrcProgram {
   int n_accum_vars;
 
   char *name;
+  char *prologue_code;
+  char *epilogue_code;
   char *asm_code;
 
   unsigned char *_unused2;
@@ -179,6 +181,8 @@ void orc_program_reset (OrcProgram *program);
 OrcCode *orc_program_take_code (OrcProgram *program);
 
 const char *orc_program_get_asm_code (OrcProgram *program);
+const char *orc_program_get_prologue_code (OrcProgram *program);
+const char *orc_program_get_epilogue_code (OrcProgram *program);
 const char * orc_program_get_error (OrcProgram *program);
 void orc_program_set_error (OrcProgram *program, const char *error);
 

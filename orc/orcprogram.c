@@ -167,6 +167,14 @@ orc_program_free (OrcProgram *program)
       program->vars[i].type_name = NULL;
     }
   }
+  if (program->prologue_code) {
+    free (program->prologue_code);
+    program->prologue_code = NULL;
+  }
+  if (program->epilogue_code) {
+    free (program->epilogue_code);
+    program->epilogue_code = NULL;
+  }
   if (program->asm_code) {
     free (program->asm_code);
     program->asm_code = NULL;
@@ -1033,6 +1041,18 @@ orc_program_get_asm_code (OrcProgram *program)
   return program->asm_code;
 }
 
+const char *
+orc_program_get_prologue_code (OrcProgram *program)
+{
+  return program->prologue_code;
+}
+
+const char *
+orc_program_get_epilogue_code (OrcProgram *program)
+{
+  return program->epilogue_code;
+}
+
 /**
  * orc_program_get_error:
  * @program: a pointer to an OrcProgram structure
@@ -1170,6 +1190,14 @@ orc_program_reset (OrcProgram *program)
   if (program->orccode) {
     orc_code_free (program->orccode);
     program->orccode = NULL;
+  }
+  if (program->prologue_code) {
+    free (program->prologue_code);
+    program->prologue_code = NULL;
+  }
+  if (program->epilogue_code) {
+    free (program->epilogue_code);
+    program->epilogue_code = NULL;
   }
   if (program->asm_code) {
     free(program->asm_code);

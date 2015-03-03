@@ -1531,25 +1531,29 @@ output_code_static (OrcProgram *p, FILE *output)
     OrcTarget *t = orc_target_get_by_name(target);
 
     result = orc_program_compile_full (p, t,
-        orc_target_get_default_flags (t));
+        orc_target_get_default_flags (t) | ORC_TARGET_C_BARE | ORC_TARGET_C_NOEXEC);
     if (ORC_COMPILE_RESULT_IS_SUCCESSFUL(result)) {
-      // Get assembly code
-      char * asm_code = orc_program_get_asm_code (p);
+      fprintf(output, "void\n");
+      output_prototype (p, output, 0);
+      fprintf(output, " {\n");
       
-      // Emit inline assembly prologue
-      fprintf(output, "asm(\"\\\n");
+      // Emit prologue code
+      fprintf(output, "%s\n", orc_program_get_prologue_code (p));
       
-      // Loop over every line and emit inline assembly
+      // Emit inline assembly properly using breaks
+      fprintf(output, "  asm(\" \\n\\\n");
+      char * asm_code = (char *)orc_program_get_asm_code (p);
       {
         char * asm_code_iter = strtok(asm_code, "\n");
         while(asm_code_iter != NULL) {
-          fprintf(output, "%s        \\n\\\n", asm_code_iter );
+          fprintf(output, "    %s        \\n\\\n", asm_code_iter );
           asm_code_iter = strtok(NULL, "\n");
         }
       }
-      
-      // Emit inline assembly epilogue
-      fprintf(output, "\");\n");
+      fprintf(output, "  \"\n");
+      fprintf(output, "%s", orc_program_get_epilogue_code (p));
+      fprintf(output, "  );\n");
+      fprintf(output, "}\n");
     } else {
       // No assembly implementation exists, so output backup C code
       printf("Failed to compile assembly for '%s', falling back to backup C code\n", p->name);

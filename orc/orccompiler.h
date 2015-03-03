@@ -19,8 +19,12 @@ typedef struct _OrcFixup OrcFixup;
 #define ORC_ENABLE_ASM_CODE
 #ifdef ORC_ENABLE_ASM_CODE
 #define ORC_ASM_CODE(compiler,...) orc_compiler_append_code(compiler, __VA_ARGS__)
+#define ORC_PROLOGUE_CODE(compiler,...) orc_compiler_append_prologue_code(compiler, __VA_ARGS__)
+#define ORC_EPILOGUE_CODE(compiler,...) orc_compiler_append_epilogue_code(compiler, __VA_ARGS__)
 #else
 #define ORC_ASM_CODE(compiler,...)
+#define ORC_PROLOGUE_CODE(compiler,...)
+#define ORC_EPILOGUE_CODE(compiler,...)
 #endif
 
 
@@ -104,6 +108,12 @@ struct _OrcCompiler {
   int long_jumps;
   int use_frame_pointer;
 
+  char *prologue_code;
+  int prologue_code_len;
+  
+  char *epilogue_code;
+  int epilogue_code_len;
+
   char *asm_code;
   int asm_code_len;
 
@@ -135,6 +145,9 @@ struct _OrcCompiler {
   void *output_insns;
   int n_output_insns;
   int n_output_insns_alloc;
+  
+  // static implementation variables
+  int inline_tokens;
 };
 
 

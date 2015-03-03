@@ -30,6 +30,10 @@
  * contained in various OrcRule structures.  These functions generate
  * assembly and object instructions by calling ORC_ASM_CODE()
  * or functions that use ORC_ASM_CODE() internally.
+ *
+ * Additional pro- and epilogue code necessary for static inline
+ * assembly code can be added by using ORC_PROLOGUE_CODE() and
+ * ORC_EPILOGUE_CODE().
  */
 
 void orc_compiler_assign_rules (OrcCompiler *compiler);
@@ -204,6 +208,16 @@ orc_program_compile_full (OrcProgram *program, OrcTarget *target,
     program->orccode = NULL;
   }
 
+  if (program->prologue_code) {
+    free (program->prologue_code);
+    program->prologue_code = NULL;
+  }
+
+  if (program->epilogue_code) {
+    free (program->epilogue_code);
+    program->epilogue_code = NULL;
+  }
+
   if (program->asm_code) {
     free (program->asm_code);
     program->asm_code = NULL;
@@ -371,6 +385,8 @@ orc_program_compile_full (OrcProgram *program, OrcTarget *target,
 
   program->code_exec = program->orccode->exec;
 
+  program->epilogue_code = compiler->epilogue_code;
+  program->prologue_code = compiler->prologue_code;
   program->asm_code = compiler->asm_code;
 
   result = compiler->result;
@@ -399,6 +415,14 @@ error:
   free (compiler->error_msg);
   if (result == 0) {
     result = ORC_COMPILE_RESULT_UNKNOWN_COMPILE;
+  }
+  if (compiler->prologue_code) {
+    free (compiler->prologue_code);
+    compiler->prologue_code = NULL;
+  }
+  if (compiler->epilogue_code) {
+    free (compiler->epilogue_code);
+    compiler->epilogue_code = NULL;
   }
   if (compiler->asm_code) {
     free (compiler->asm_code);
@@ -1033,6 +1057,40 @@ orc_compiler_append_code (OrcCompiler *p, const char *fmt, ...)
   p->asm_code = realloc (p->asm_code, p->asm_code_len + n + 1);
   memcpy (p->asm_code + p->asm_code_len, tmp, n + 1);
   p->asm_code_len += n;
+}
+
+void
+orc_compiler_append_prologue_code (OrcCompiler *p, const char *fmt, ...)
+{
+  char tmp[200];
+  va_list varargs;
+  int n;
+
+  va_start (varargs, fmt);
+  vsnprintf(tmp, 200 - 1, fmt, varargs);
+  va_end (varargs);
+
+  n = strlen (tmp);
+  p->prologue_code = realloc (p->prologue_code, p->prologue_code_len + n + 1);
+  memcpy (p->prologue_code + p->prologue_code_len, tmp, n + 1);
+  p->prologue_code_len += n;
+}
+
+void
+orc_compiler_append_epilogue_code (OrcCompiler *p, const char *fmt, ...)
+{
+  char tmp[200];
+  va_list varargs;
+  int n;
+
+  va_start (varargs, fmt);
+  vsnprintf(tmp, 200 - 1, fmt, varargs);
+  va_end (varargs);
+
+  n = strlen (tmp);
+  p->epilogue_code = realloc (p->epilogue_code, p->epilogue_code_len + n + 1);
+  memcpy (p->epilogue_code + p->epilogue_code_len, tmp, n + 1);
+  p->epilogue_code_len += n;
 }
 
 int

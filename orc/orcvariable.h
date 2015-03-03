@@ -73,6 +73,9 @@ struct _OrcVariable {
 
   int has_parameter;
   int parameter;
+
+  // static implementation variables
+  int inline_token_id;
 };
 
 ORC_END_DECLS

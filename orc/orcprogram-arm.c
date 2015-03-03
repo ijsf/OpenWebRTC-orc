@@ -311,6 +311,11 @@ orc_compiler_orc_arm_assemble (OrcCompiler *compiler)
 
   compiler->vars[dest_var].is_aligned = FALSE;
 
+  if(compiler->target_flags & ORC_TARGET_C_NOEXEC)
+  {
+    ORC_ERROR("Static inlined assembly not supported for target arm");
+  }
+
   orc_arm_emit_prologue (compiler);
 
   orc_arm_load_constants_outer (compiler);

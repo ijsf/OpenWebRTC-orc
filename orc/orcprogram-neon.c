@@ -599,7 +599,7 @@ orc_neon_load_constants_inner_token (OrcCompiler *compiler)
 }
 
 void
-orc_neon_output_tokens (OrcCompiler *compiler)
+orc_neon_output_tokens_rw (OrcCompiler *compiler)
 {
   int i;
   for(i=0;i<ORC_N_COMPILER_VARIABLES;i++){
@@ -615,11 +615,44 @@ orc_neon_output_tokens (OrcCompiler *compiler)
       case ORC_VAR_TYPE_DEST:
         // d1
         // src/dest: pointer, read-write, r* registers
-        ORC_EPILOGUE_CODE (compiler, "    [%s] \"+rm\" (%s),\n", varnames[i], varnames[i]);
+        ORC_EPILOGUE_CODE (compiler, "    [%s] \"+X\" (%s),\n", varnames[i], varnames[i]);
         break;
       case ORC_VAR_TYPE_ACCUMULATOR:
         // accumulator: pointer, read-write, gp register
-        ORC_EPILOGUE_CODE (compiler, "    [%s] \"+m\" (%s),\n", varnames[i], varnames[i]);
+        ORC_EPILOGUE_CODE (compiler, "    [%s] \"+X\" (%s),\n", varnames[i], varnames[i]);
+        break;
+      case ORC_VAR_TYPE_TEMP:
+        break;
+      default:
+        ORC_PROGRAM_ERROR(compiler,"bad vartype");
+        break;
+    }
+  }
+}
+
+void
+orc_neon_output_tokens_r (OrcCompiler *compiler)
+{
+  int i;
+  for(i=0;i<ORC_N_COMPILER_VARIABLES;i++){
+    if (compiler->vars[i].name == NULL) continue;
+
+    switch (compiler->vars[i].vartype) {
+      case ORC_VAR_TYPE_CONST:
+        break;
+      case ORC_VAR_TYPE_PARAM:
+        break;
+      case ORC_VAR_TYPE_SRC:
+        // s1
+      case ORC_VAR_TYPE_DEST:
+        // d1
+        // add strides
+        if( compiler->program->is_2d )
+        {
+          ORC_EPILOGUE_CODE (compiler, "    [%s_stride] \"X\" (%s_stride),\n", varnames[i], varnames[i]);
+        }
+        break;
+      case ORC_VAR_TYPE_ACCUMULATOR:
         break;
       case ORC_VAR_TYPE_TEMP:
         break;
@@ -664,11 +697,8 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
         }
         else
         {
-          // m is stored in function argument a1
-          ORC_PROLOGUE_CODE (compiler, "  int m = *a1;\n");
+          // m is stored in function argument
         }
-        // var_a2 = m
-        ORC_PROLOGUE_CODE (compiler, "  *a2 = m;\n");
       }
 
       // Prepare counters
@@ -947,11 +977,11 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
         neon_add_strides (compiler);
 
         // a3 = var_a2
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_A3, "a2");
+        orc_neon_emit_load_reg_token (compiler, ORC_ARM_A3, "m");
         // a3 = a3 - 1
         orc_arm_emit_sub_imm (compiler, ORC_ARM_A3, ORC_ARM_A3, 1, TRUE);
         // var_a2 = a3
-        orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "a2");
+        orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "m");
         // if ??? != ??? goto LABEL_OUTER_LOOP
         orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_OUTER_LOOP);
       }
@@ -973,29 +1003,29 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
       
       // Variable tokens
       ORC_EPILOGUE_CODE (compiler, "  :\n");
-      orc_neon_output_tokens (compiler);
+      orc_neon_output_tokens_rw (compiler);
       
       // Fixed tokens
       {
         // output (write-only)
         ORC_EPILOGUE_CODE (compiler,
-          "    [counter1] \"+r\" (counter1),\n"
-          "    [counter2] \"+r\" (counter2),\n"
-          "    [counter3] \"+r\" (counter3)\n"
+          "    [counter1] \"+X\" (counter1),\n"
+          "    [counter2] \"+X\" (counter2),\n"
+          "    [counter3] \"+X\" (counter3)\n"
           );
         // input (read/write)
+        ORC_EPILOGUE_CODE (compiler, "  :\n");
+        orc_neon_output_tokens_r (compiler);
         if (compiler->program->is_2d) {
           ORC_EPILOGUE_CODE (compiler,
-            "  :\n"
-            "    [n] \"r\" (n),\n"
-            "    [m] \"r\" (m)\n"
+            "    [n] \"X\" (n),\n"
+            "    [m] \"X\" (m)\n"
             );
         }
         else
         {
           ORC_EPILOGUE_CODE (compiler,
-            "  :\n"
-            "    [n] \"r\" (n)\n"
+            "    [n] \"X\" (n)\n"
             );
         }
       }

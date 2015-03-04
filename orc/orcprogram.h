@@ -178,6 +178,7 @@ void orc_program_set_sampling_type (OrcProgram *program, int var, int sampling_t
 int orc_program_allocate_register (OrcProgram *program, int is_data);
 
 void orc_program_reset (OrcProgram *program);
+void orc_program_reset_error (OrcProgram *program);
 OrcCode *orc_program_take_code (OrcProgram *program);
 
 const char *orc_program_get_asm_code (OrcProgram *program);

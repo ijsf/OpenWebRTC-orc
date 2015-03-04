@@ -1209,6 +1209,15 @@ orc_program_reset (OrcProgram *program)
   }
 }
 
+void
+orc_program_reset_error (OrcProgram *program)
+{
+  if (program->error_msg) {
+    free(program->error_msg);
+    program->error_msg = NULL;
+  }
+}
+
 OrcCode *
 orc_program_take_code (OrcProgram *program)
 {

@@ -32,9 +32,7 @@ orc_arm_emit_prologue (OrcCompiler *compiler)
   unsigned int regs = 0;
   int i;
 
-  if(!compiler->program->inline_assembly) {
-    orc_compiler_append_code(compiler,".global %s\n", compiler->program->name);
-  }
+  orc_compiler_append_code(compiler,".global %s\n", compiler->program->name);
   orc_compiler_append_code(compiler,"%s:\n", compiler->program->name);
 
   for(i=0;i<16;i++){

@@ -64,9 +64,9 @@ orc_neon_emit_prologue (OrcCompiler *compiler)
   orc_uint32 vregs = 0;
   int i;
 
-  if( !(compiler->target_flags & ORC_TARGET_C_NOEXEC) ) {
-    orc_compiler_append_code(compiler,".global %s\n", compiler->program->name);
-    orc_compiler_append_code(compiler,"%s:\n", compiler->program->name);
+  if(!compiler->intrinsics) {
+    orc_compiler_append_code(compiler,".global %s%s\n", (compiler->static_assembly) ? "_orc_code_" : "", compiler->program->name);
+    orc_compiler_append_code(compiler,"%s%s:\n", (compiler->static_assembly) ? "_orc_code_" : "", compiler->program->name);
   }
 
   for(i=0;i<16;i++){
@@ -83,7 +83,7 @@ orc_neon_emit_prologue (OrcCompiler *compiler)
      }
   }
 
-  if( !(compiler->target_flags & ORC_TARGET_C_NOEXEC) ) {
+  if(!compiler->intrinsics) {
     orc_arm_emit_push (compiler, regs, vregs);
   }
 }
@@ -91,20 +91,23 @@ orc_neon_emit_prologue (OrcCompiler *compiler)
 void
 orc_neon_dump_insns (OrcCompiler *compiler)
 {
+  if(!compiler->intrinsics) {
+    orc_arm_emit_label (compiler, 0);
 
-  orc_arm_emit_label (compiler, 0);
+    orc_arm_emit_add (compiler, ORC_ARM_A2, ORC_ARM_A3, ORC_ARM_A4);
+    orc_arm_emit_sub (compiler, ORC_ARM_A2, ORC_ARM_A3, ORC_ARM_A4);
+    orc_arm_emit_push (compiler, 0x06, 0U);
+    orc_arm_emit_mov (compiler, ORC_ARM_A2, ORC_ARM_A3);
 
-  orc_arm_emit_add (compiler, ORC_ARM_A2, ORC_ARM_A3, ORC_ARM_A4);
-  orc_arm_emit_sub (compiler, ORC_ARM_A2, ORC_ARM_A3, ORC_ARM_A4);
-  orc_arm_emit_push (compiler, 0x06, 0U);
-  orc_arm_emit_mov (compiler, ORC_ARM_A2, ORC_ARM_A3);
+    orc_arm_emit_branch (compiler, ORC_ARM_COND_LE, 0);
+    orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, 0);
 
-  orc_arm_emit_branch (compiler, ORC_ARM_COND_LE, 0);
-  orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, 0);
-
-  orc_arm_emit_load_imm (compiler, ORC_ARM_A3, 0xa500);
-  orc_arm_loadw (compiler, ORC_ARM_A3, ORC_ARM_A4, 0xa5);
-  orc_arm_emit_load_reg (compiler, ORC_ARM_A3, ORC_ARM_A4, 0x5a5);
+    orc_arm_emit_load_imm (compiler, ORC_ARM_A3, 0xa500);
+    orc_arm_loadw (compiler, ORC_ARM_A3, ORC_ARM_A4, 0xa5);
+    orc_arm_emit_load_reg (compiler, ORC_ARM_A3, ORC_ARM_A4, 0x5a5);
+  } else {
+    ORC_ERROR("orc_neon_dump_insns not supported for intrinsics");
+  }
 }
 
 void
@@ -128,7 +131,7 @@ orc_neon_emit_epilogue (OrcCompiler *compiler)
      }
   }
 
-  if( !(compiler->target_flags & ORC_TARGET_C_NOEXEC) ) {
+  if(!compiler->intrinsics) {
     orc_arm_emit_pop (compiler, regs, vregs);
     orc_arm_emit_bx_lr (compiler);
 
@@ -293,6 +296,44 @@ orc_compiler_neon_init (OrcCompiler *compiler)
 }
 
 void
+orc_neon_declare_vars (OrcCompiler *compiler)
+{
+  int i;
+  ORC_INTRINSIC_CODE (compiler, "// BEGIN variable declarations\n");
+  for(i=0;i<ORC_N_COMPILER_VARIABLES;i++){
+    if (compiler->vars[i].name == NULL) continue;
+
+    int reg;
+    if (compiler->vars[i].ptr_register) {
+      reg = compiler->vars[i].ptr_register;
+    } else if (compiler->vars[i].alloc) {
+      reg = compiler->vars[i].alloc;
+    } else {
+      continue;
+    }
+    
+    switch(compiler->vars[i].size) {
+      case 1:
+        ORC_INTRINSIC_CODE (compiler, "uint8x8_t d%d; uint8x16_t q%d; // %s\n", reg, reg, compiler->vars[i].name);
+        break;
+      case 2:
+        ORC_INTRINSIC_CODE (compiler, "uint16x4_t d%d; uint16x8_t q%d; // %s\n", reg, reg, compiler->vars[i].name);
+        break;
+      case 4:
+        ORC_INTRINSIC_CODE (compiler, "uint32x2_t d%d; uint32x4_t q%d; // %s\n", reg, reg, compiler->vars[i].name);
+        break;
+      case 8:
+        ORC_INTRINSIC_CODE (compiler, "uint64x1_t d%d; uint64x2_t q%d; // %s\n", reg, reg, compiler->vars[i].name);
+        break;
+      default:
+        ORC_ERROR("unhandled var size %d", compiler->vars[i].size);
+        break;
+    }
+  }
+  ORC_INTRINSIC_CODE (compiler, "// END variable declarations\n");
+}
+
+void
 orc_neon_load_constants_outer (OrcCompiler *compiler)
 {
   int i;
@@ -325,7 +366,11 @@ orc_neon_load_constants_outer (OrcCompiler *compiler)
 
     if (!(insn->flags & ORC_INSN_FLAG_INVARIANT)) continue;
 
-    ORC_ASM_CODE(compiler,"# %d: %s\n", i, insn->opcode->name);
+    if(!compiler->intrinsics) {
+      ORC_ASM_CODE(compiler,"# %d: %s\n", i, insn->opcode->name);
+    } else {
+      ORC_INTRINSIC_CODE (compiler, "// %d: %s\n", i, insn->opcode->name);
+    }
 
     compiler->insn_shift = compiler->loop_shift;
     if (insn->flags & ORC_INSTRUCTION_FLAG_X2) {
@@ -358,9 +403,16 @@ orc_neon_load_constants_inner (OrcCompiler *compiler)
         break;
       case ORC_VAR_TYPE_SRC:
       case ORC_VAR_TYPE_DEST:
-        orc_arm_emit_load_reg (compiler, 
-            compiler->vars[i].ptr_register,
-            compiler->exec_reg, ORC_STRUCT_OFFSET(OrcExecutor, arrays[i]));
+        if (!compiler->intrinsics) {
+          orc_arm_emit_load_reg (compiler, 
+              compiler->vars[i].ptr_register,
+              compiler->exec_reg, ORC_STRUCT_OFFSET(OrcExecutor, arrays[i]));
+        } else {
+          ORC_INTRINSIC_CODE (compiler, "a%u = ex->arrays[%d];\n",
+            ORC_INTRINSIC_REG((compiler->vars[i].ptr_register)),
+            i
+          );
+        }
         break;
       case ORC_VAR_TYPE_ACCUMULATOR:
         break;
@@ -541,129 +593,6 @@ orc_neon_get_type_name (int size)
 }
 
 void
-orc_neon_emit_load_reg_token (OrcCompiler *compiler, int dest, const char* srctoken)
-{
-  ORC_ASM_CODE(compiler, "  mov %s, %%[%s]\n", orc_arm_reg_name(dest), srctoken);
-  
-  // Bogus codeptr increase
-  compiler->codeptr+=4;
-}
-
-void
-orc_neon_emit_load_reg_token_suffix (OrcCompiler *compiler, int dest, const char* srctoken, char* suffix)
-{
-  ORC_ASM_CODE(compiler, "  mov %s, %%[%s_%s]\n", orc_arm_reg_name(dest), srctoken, suffix);
-  
-  // Bogus codeptr increase
-  compiler->codeptr+=4;
-}
-
-void
-orc_neon_emit_store_reg_token (OrcCompiler *compiler, int src, const char* desttoken)
-{
-  //ORC_ASM_CODE(compiler,"  str %s, %%[%s]\n", orc_arm_reg_name(src), desttoken);
-  ORC_ASM_CODE(compiler,"  mov %%[%s], %s\n", desttoken, orc_arm_reg_name(src));
-
-  // Bogus codeptr increase
-  compiler->codeptr+=4;
-}
-
-void
-orc_neon_load_constants_inner_token (OrcCompiler *compiler)
-{
-  int i;
-  for(i=0;i<ORC_N_COMPILER_VARIABLES;i++){
-    if (compiler->vars[i].name == NULL) continue;
-
-    switch (compiler->vars[i].vartype) {
-      case ORC_VAR_TYPE_CONST:
-        break;
-      case ORC_VAR_TYPE_PARAM:
-        break;
-      case ORC_VAR_TYPE_SRC:
-        // s1
-      case ORC_VAR_TYPE_DEST:
-        // d1
-        // Emit mov to token
-        orc_neon_emit_load_reg_token (compiler, compiler->vars[i].ptr_register, varnames[i]);
-        break;
-      case ORC_VAR_TYPE_ACCUMULATOR:
-        break;
-      case ORC_VAR_TYPE_TEMP:
-        break;
-      default:
-        ORC_PROGRAM_ERROR(compiler,"bad vartype");
-        break;
-    }
-  }
-}
-
-void
-orc_neon_output_tokens_rw (OrcCompiler *compiler)
-{
-  int i;
-  for(i=0;i<ORC_N_COMPILER_VARIABLES;i++){
-    if (compiler->vars[i].name == NULL) continue;
-
-    switch (compiler->vars[i].vartype) {
-      case ORC_VAR_TYPE_CONST:
-        break;
-      case ORC_VAR_TYPE_PARAM:
-        break;
-      case ORC_VAR_TYPE_SRC:
-        // s1
-      case ORC_VAR_TYPE_DEST:
-        // d1
-        // src/dest: pointer, read-write, r* registers
-        ORC_EPILOGUE_CODE (compiler, "    [%s] \"+X\" (%s),\n", varnames[i], varnames[i]);
-        break;
-      case ORC_VAR_TYPE_ACCUMULATOR:
-        // accumulator: pointer, read-write, gp register
-        ORC_EPILOGUE_CODE (compiler, "    [%s] \"+X\" (%s),\n", varnames[i], varnames[i]);
-        break;
-      case ORC_VAR_TYPE_TEMP:
-        break;
-      default:
-        ORC_PROGRAM_ERROR(compiler,"bad vartype");
-        break;
-    }
-  }
-}
-
-void
-orc_neon_output_tokens_r (OrcCompiler *compiler)
-{
-  int i;
-  for(i=0;i<ORC_N_COMPILER_VARIABLES;i++){
-    if (compiler->vars[i].name == NULL) continue;
-
-    switch (compiler->vars[i].vartype) {
-      case ORC_VAR_TYPE_CONST:
-        break;
-      case ORC_VAR_TYPE_PARAM:
-        break;
-      case ORC_VAR_TYPE_SRC:
-        // s1
-      case ORC_VAR_TYPE_DEST:
-        // d1
-        // add strides
-        if( compiler->program->is_2d )
-        {
-          ORC_EPILOGUE_CODE (compiler, "    [%s_stride] \"X\" (%s_stride),\n", varnames[i], varnames[i]);
-        }
-        break;
-      case ORC_VAR_TYPE_ACCUMULATOR:
-        break;
-      case ORC_VAR_TYPE_TEMP:
-        break;
-      default:
-        ORC_PROGRAM_ERROR(compiler,"bad vartype");
-        break;
-    }
-  }
-}
-
-void
 orc_compiler_neon_assemble (OrcCompiler *compiler)
 {
   int align_var;
@@ -681,150 +610,181 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
 
   #define ORC_NEON_ALIGNED_DEST_CUTOFF 64
   
-  if(compiler->target_flags & ORC_TARGET_C_NOEXEC)
-  {
+  if(compiler->intrinsics) {
+    ORC_INTRINSIC_INDENT_INCREASE (compiler);
+    
     // Prologue
     {
-      // Prepare C parameters
-      if (compiler->program->constant_n != 0) {
-        // n is constant
-        ORC_PROLOGUE_CODE (compiler, "  int n = %d;\n", compiler->program->constant_n);
+      ORC_INTRINSIC_CODE (compiler,"int i;\n");
+      if (compiler->program->is_2d) {
+        ORC_INTRINSIC_CODE (compiler,"int j;\n");
+      }
+      if (compiler->program->constant_n == 0) {
+        ORC_INTRINSIC_CODE (compiler,"int n = ex->n;\n");
+      } else {
+        ORC_INTRINSIC_CODE (compiler,"int n = %d;\n", compiler->program->constant_n);
       }
       if (compiler->program->is_2d) {
-        if (compiler->program->constant_m > 0) {
-          // m is constant
-          ORC_PROLOGUE_CODE (compiler, "  int m = %d;\n", compiler->program->constant_m);
-        }
-        else
-        {
-          // m is stored in function argument
+        if (compiler->program->constant_m == 0) {
+          ORC_INTRINSIC_CODE (compiler,"int m = ex->params[ORC_VAR_A1];\n");
+        } else {
+          ORC_INTRINSIC_CODE (compiler,"int m = %d;\n", compiler->program->constant_m);
         }
       }
-
       // Prepare counters
-      ORC_PROLOGUE_CODE (compiler, "  uint32_t counter1 = 0;\n");
-      ORC_PROLOGUE_CODE (compiler, "  uint32_t counter2 = %d >> %d;\n", ORC_NEON_ALIGNED_DEST_CUTOFF, compiler->loop_shift);
-      ORC_PROLOGUE_CODE (compiler, "  uint32_t counter3 = counter2 & ((1<<%d)-1);\n", compiler->loop_shift);
+      ORC_INTRINSIC_CODE (compiler, "uint32_t counter1 = 0;\n");
+      ORC_INTRINSIC_CODE (compiler, "uint32_t counter2 = %d >> %d;\n", ORC_NEON_ALIGNED_DEST_CUTOFF, compiler->loop_shift);
+      ORC_INTRINSIC_CODE (compiler, "uint32_t counter3 = counter2 & ((1<<%d)-1);\n", compiler->loop_shift);
     }
-        
-    // Emit prologue
-    orc_neon_emit_prologue (compiler);
     
+    // Declare variables
+    orc_neon_declare_vars (compiler);
+        
     // Load outer constants
     orc_neon_load_constants_outer (compiler);
 
     // Loop code
     {
-      // Outer loop label
-      orc_arm_emit_label (compiler, LABEL_OUTER_LOOP);
+      // outer loop
+      if (compiler->program->is_2d) {
+        ORC_INTRINSIC_CODE (compiler, "for(size_t j = 0; j < m; ++j) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
+      }
       
       // Loop phase 1
       if (compiler->loop_shift > 0 && compiler->n_insns < 5) {
         
         // ORC_NEON_ALIGNED_DEST_CUTOFF case
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_A3, "counter2");
-        orc_arm_emit_cmp_imm (compiler, ORC_ARM_A3, ORC_NEON_ALIGNED_DEST_CUTOFF);
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_GT, LABEL_REGION0_SKIP);
+        //orc_neon_emit_load_reg_token (compiler, ORC_ARM_A3, "counter2");
+        //orc_arm_emit_cmp_imm (compiler, ORC_ARM_A3, ORC_NEON_ALIGNED_DEST_CUTOFF);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_GT, LABEL_REGION0_SKIP);
+        ORC_INTRINSIC_CODE (compiler, "if( counter2 <= %d ) {\n", ORC_NEON_ALIGNED_DEST_CUTOFF);
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
         
         // Load constants from C pointers into allocated registers
-        orc_neon_load_constants_inner_token (compiler);
+        orc_neon_load_constants_inner (compiler);
         
         // ip = counter2
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "counter2");
+        //orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "counter2");
+        
         // if ip == 0 goto LABEL_REGION2_SKIP
-        orc_arm_emit_cmp_imm (compiler, ORC_ARM_IP, 0);
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION2_SKIP);
+        //orc_arm_emit_cmp_imm (compiler, ORC_ARM_IP, 0);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION2_SKIP);
+        ORC_INTRINSIC_CODE (compiler, "for(size_t i = 0; i < counter2; ++i) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
 
         // LABEL_REGION0_LOOP:
-        compiler->size_region = 0;
-        orc_arm_emit_label (compiler, LABEL_REGION0_LOOP);
+        //compiler->size_region = 0;
+        //orc_arm_emit_label (compiler, LABEL_REGION0_LOOP);
+        
         // ip = ip - 1
-        orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
+        //orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
+        
         // NEON loop
         orc_neon_emit_loop (compiler, -1);
+        
         // if ... != ... goto LABEL_REGION0_LOOP
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION0_LOOP);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION0_LOOP);
 
         // goto LABEL_REGION2_SKIP
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, LABEL_REGION2_SKIP);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, LABEL_REGION2_SKIP);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
 
         // LABEL_REGION0_SKIP:
-        orc_arm_emit_label (compiler, LABEL_REGION0_SKIP);
+        //orc_arm_emit_label (compiler, LABEL_REGION0_SKIP);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
       }
 
       // Loop phase 2
       if (compiler->loop_shift > 0) {
         // ip = align_shift * 2
-        orc_arm_emit_load_imm (compiler, ORC_ARM_IP, 1<<align_shift);
+        //orc_arm_emit_load_imm (compiler, ORC_ARM_IP, 1<<align_shift);
+        ORC_INTRINSIC_CODE (compiler, "size_t ip = %d;\n", align_shift);
         
         // a2 = alignment variable (has been checked with get_align_var above)
-        if (compiler->vars[ORC_VAR_D1].size) {
-          orc_neon_emit_load_reg_token (compiler, ORC_ARM_A2, "d1");
-        }
-        else if (compiler->vars[ORC_VAR_S1].size) {
-          orc_neon_emit_load_reg_token (compiler, ORC_ARM_A2, "s1");
-        }
+        //if (compiler->vars[ORC_VAR_D1].size) {
+        //  orc_neon_emit_load_reg_token (compiler, ORC_ARM_A2, "d1");
+        //}
+        //else if (compiler->vars[ORC_VAR_S1].size) {
+        //  orc_neon_emit_load_reg_token (compiler, ORC_ARM_A2, "s1");
+        //}
         
         // ip -= a2
-        orc_arm_emit_sub (compiler, ORC_ARM_IP, ORC_ARM_IP, ORC_ARM_A2);
+        //orc_arm_emit_sub (compiler, ORC_ARM_IP, ORC_ARM_IP, ORC_ARM_A2);
+        ORC_INTRINSIC_CODE (compiler, "ip -= ex->arrays[%d];\n", align_var);
+        
         // ip &= (1<<align_shift)-1
-        orc_arm_emit_and_imm (compiler, ORC_ARM_IP, ORC_ARM_IP,
-            (1<<align_shift)-1);
+        //orc_arm_emit_and_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, (1<<align_shift)-1);
+        ORC_INTRINSIC_CODE (compiler, "ip &= %d;\n", (1<<align_shift)-1);
         if (var_size_shift > 0) {
           // ip = ip >> var_size_shift
-          orc_arm_emit_asr_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, var_size_shift);
+          //orc_arm_emit_asr_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, var_size_shift);
+          ORC_INTRINSIC_CODE (compiler, "ip = ip >> %d;\n", var_size_shift);
         }
 
         // a3 = n
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_A3, "n");
+        //orc_neon_emit_load_reg_token (compiler, ORC_ARM_A3, "n");
         // if a3 <= ip goto LABEL_ONE_REGION
-        orc_arm_emit_cmp (compiler, ORC_ARM_A3, ORC_ARM_IP);
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_LE, LABEL_ONE_REGION);
+        //orc_arm_emit_cmp (compiler, ORC_ARM_A3, ORC_ARM_IP);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_LE, LABEL_ONE_REGION);
+        ORC_INTRINSIC_CODE (compiler, "if(n > ip) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
 
         // counter1 = ip
-        orc_neon_emit_store_reg_token (compiler, ORC_ARM_IP, "counter1");
+        //orc_neon_emit_store_reg_token (compiler, ORC_ARM_IP, "counter1");
+        ORC_INTRINSIC_CODE (compiler, "counter1 = ip;\n");
 
         // a2 = a3 - ip
-        orc_arm_emit_sub (compiler, ORC_ARM_A2, ORC_ARM_A3, ORC_ARM_IP);
+        //orc_arm_emit_sub (compiler, ORC_ARM_A2, ORC_ARM_A3, ORC_ARM_IP);
 
         // a3 = a2 >> (compiler->loop_shift + compiler->unroll_shift)
-        orc_arm_emit_asr_imm (compiler, ORC_ARM_A3, ORC_ARM_A2,
-            compiler->loop_shift + compiler->unroll_shift);
+        //orc_arm_emit_asr_imm (compiler, ORC_ARM_A3, ORC_ARM_A2,
+        //    compiler->loop_shift + compiler->unroll_shift);
         
         // counter2 = a3
-        orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter2");
+        //orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter2");
+        ORC_INTRINSIC_CODE (compiler, "counter2 = (n - ip) >> %d;\n", compiler->loop_shift + compiler->unroll_shift);
 
         // a3 = a2 & ((1<<(compiler->loop_shift + compiler->unroll_shift))-1)
-        orc_arm_emit_and_imm (compiler, ORC_ARM_A3, ORC_ARM_A2,
-            (1<<(compiler->loop_shift + compiler->unroll_shift))-1);
+        //orc_arm_emit_and_imm (compiler, ORC_ARM_A3, ORC_ARM_A2, (1<<(compiler->loop_shift + compiler->unroll_shift))-1);
 
         // counter3 = a3
-        orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter3");
+        //orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter3");
+        ORC_INTRINSIC_CODE (compiler, "counter3 = %d;\n", compiler->loop_shift + compiler->unroll_shift);
 
-        // if ??? goto LABEL_ONE_REGION_AFTER
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, LABEL_ONE_REGION_AFTER);
+        // goto LABEL_ONE_REGION_AFTER
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, LABEL_ONE_REGION_AFTER);
 
         // LABEL_ONE_REGION:
-        orc_arm_emit_label (compiler, LABEL_ONE_REGION);
+        //orc_arm_emit_label (compiler, LABEL_ONE_REGION);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "} else {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
 
         // counter1 = a3
-        orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter1");
+        //orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter1");
+        ORC_INTRINSIC_CODE (compiler, "counter1 = n;\n");
 
         // a3 = 0
-        orc_arm_emit_load_imm (compiler, ORC_ARM_A3, 0);
+        //orc_arm_emit_load_imm (compiler, ORC_ARM_A3, 0);
 
         // counter2 = a3 = 0
-        orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter2");
+        //orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter2");
 
         // counter3 = a3 = 0
-        orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter3");
+        //orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "counter3");
+        ORC_INTRINSIC_CODE (compiler, "counter2 = counter3 = 0;\n");
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
 
         // LABEL_ONE_REGION_AFTER:
-        orc_arm_emit_label (compiler, LABEL_ONE_REGION_AFTER);
+        //orc_arm_emit_label (compiler, LABEL_ONE_REGION_AFTER);
       }
       
       // Load constants from C pointers into allocated registers
-      orc_neon_load_constants_inner_token (compiler);
+      orc_neon_load_constants_inner (compiler);
       
       // Loop phase 3
       if (compiler->loop_shift > 0) {
@@ -832,26 +792,30 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
         compiler->loop_shift = 0;
 
         // ip = counter1
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "counter1");
+        //orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "counter1");
 
         // if ip == 0 goto LABEL_REGION1_SKIP
-        orc_arm_emit_cmp_imm (compiler, ORC_ARM_IP, 0);
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION1_SKIP);
+        //orc_arm_emit_cmp_imm (compiler, ORC_ARM_IP, 0);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION1_SKIP);
 
         // LABEL_REGION1_LOOP:
-        orc_arm_emit_label (compiler, LABEL_REGION1_LOOP);
+        //orc_arm_emit_label (compiler, LABEL_REGION1_LOOP);
+        ORC_INTRINSIC_CODE (compiler, "for( size_t i = 0; i < counter1; ++i ) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
       
         // ip = ip - 1
-        orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
+        //orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
       
         // NEON loop
         orc_neon_emit_loop (compiler, -1);
       
         // if ??? != ??? goto LABEL_REGION1_LOOP
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION1_LOOP);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION1_LOOP);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
       
         // LABEL_REGION1_SKIP:
-        orc_arm_emit_label (compiler, LABEL_REGION1_SKIP);
+        //orc_arm_emit_label (compiler, LABEL_REGION1_SKIP);
 
         compiler->loop_shift = save_loop_shift;
         compiler->vars[align_var].is_aligned = TRUE;
@@ -860,87 +824,118 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
       // Loop phase 4
       if (compiler->loop_shift > 0) {
         // ip = counter2
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "counter2");
+        //orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "counter2");
+        ORC_INTRINSIC_CODE (compiler, "size_t loop_size = counter2;\n");
       } else {
         // ip = n
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "n");
+        //orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "n");
+        ORC_INTRINSIC_CODE (compiler, "size_t loop_size = n;\n");
       }
       
       {
+        ORC_INTRINSIC_CODE (compiler, "size_t gp_tmpreg;\n");
         // if ip == 0 goto LABEL_REGION2_SKIP
-        orc_arm_emit_cmp_imm (compiler, ORC_ARM_IP, 0);
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION2_SKIP);
+        //orc_arm_emit_cmp_imm (compiler, ORC_ARM_IP, 0);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION2_SKIP);
 
         // gp_tmpreg = ip >> (17 + var_size_shift - compiler->loop_shift - compiler->unroll_shift)
-        orc_arm_emit_asr_imm (compiler, compiler->gp_tmpreg, ORC_ARM_IP,
-            17 + var_size_shift - compiler->loop_shift - compiler->unroll_shift);
+        //orc_arm_emit_asr_imm (compiler, compiler->gp_tmpreg, ORC_ARM_IP,
+        //  17 + var_size_shift - compiler->loop_shift - compiler->unroll_shift);
         // if gp_tmpreg == 0 goto LABEL_REGION2_MEDIUM
-        orc_arm_emit_cmp_imm (compiler, compiler->gp_tmpreg, 0);
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION2_MEDIUM);
+        //orc_arm_emit_cmp_imm (compiler, compiler->gp_tmpreg, 0);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION2_MEDIUM);
+        ORC_INTRINSIC_CODE (compiler, "gp_tmpreg = loop_size >> %d;\n",
+          17 + var_size_shift - compiler->loop_shift - compiler->unroll_shift
+        );
+        ORC_INTRINSIC_CODE (compiler, "if( gp_tmpreg != 0 ) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
 
         /* N is larger than L2 cache size */
         compiler->size_region = 3;
 
         // LABEL_REGION2_LOOP_LARGE:
-        orc_arm_emit_label (compiler, LABEL_REGION2_LOOP_LARGE);
+        //orc_arm_emit_label (compiler, LABEL_REGION2_LOOP_LARGE);
+        ORC_INTRINSIC_CODE (compiler, "for( size_t i = 0; i < loop_size; ++i ) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
     
         // ip = ip - 1
-        orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
+        //orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
         for(i=0;i<(1<<compiler->unroll_shift);i++){
           // NEON loop
           orc_neon_emit_loop (compiler, i);
         }
         // if ??? != ??? goto LABEL_REGION2_LOOP_LARGE
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION2_LOOP_LARGE);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION2_LOOP_LARGE);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
+
         // goto LABEL_REGION2_SKIP
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, LABEL_REGION2_SKIP);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, LABEL_REGION2_SKIP);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "} else {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
 
         // LABEL_REGION2_MEDIUM
-        orc_arm_emit_label (compiler, LABEL_REGION2_MEDIUM);
+        //orc_arm_emit_label (compiler, LABEL_REGION2_MEDIUM);
+        
         // gp_tmpreg = ip >> (13 + var_size_shift - compiler->loop_shift - compiler->unroll_shift)
-        orc_arm_emit_asr_imm (compiler, compiler->gp_tmpreg, ORC_ARM_IP,
-            13 + var_size_shift - compiler->loop_shift - compiler->unroll_shift);
+        //orc_arm_emit_asr_imm (compiler, compiler->gp_tmpreg, ORC_ARM_IP,
+        //    13 + var_size_shift - compiler->loop_shift - compiler->unroll_shift);
         // if gp_tmpreg == 0 goto LABEL_REGION2_SMALL
-        orc_arm_emit_cmp_imm (compiler, compiler->gp_tmpreg, 0);
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION2_SMALL);
+        //orc_arm_emit_cmp_imm (compiler, compiler->gp_tmpreg, 0);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION2_SMALL);
+        ORC_INTRINSIC_CODE (compiler, "gp_tmpreg = loop_size >> %d;\n",
+          13 + var_size_shift - compiler->loop_shift - compiler->unroll_shift
+        );
+        ORC_INTRINSIC_CODE (compiler, "if( gp_tmpreg != 0 ) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
 
         /* N is smaller than L2 cache size */
         compiler->size_region = 2;
     
         // LABEL_REGION2_LOOP_MEDIUM:
-        orc_arm_emit_label (compiler, LABEL_REGION2_LOOP_MEDIUM);
+        //orc_arm_emit_label (compiler, LABEL_REGION2_LOOP_MEDIUM);
+        ORC_INTRINSIC_CODE (compiler, "for( size_t i = 0; i < loop_size; ++i ) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
 
         // ip = ip - 1
-        orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
+        //orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
         for(i=0;i<(1<<compiler->unroll_shift);i++){
           // NEON loop
           orc_neon_emit_loop (compiler, i);
         }
         // if ??? != ??? goto LABEL_REGION2_LOOP_MEDIUM
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION2_LOOP_MEDIUM);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION2_LOOP_MEDIUM);
         // goto LABEL_REGION2_SKIP
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, LABEL_REGION2_SKIP);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_AL, LABEL_REGION2_SKIP);
 
         // LABEL_REGION2_SMALL:
-        orc_arm_emit_label (compiler, LABEL_REGION2_SMALL);
+        //orc_arm_emit_label (compiler, LABEL_REGION2_SMALL);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "} else {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
     
         /* N is smaller than L2 cache size */
         compiler->size_region = 1;
     
         // LABEL_REGION2_LOOP_SMALL:
-        orc_arm_emit_label (compiler, LABEL_REGION2_LOOP_SMALL);
+        //orc_arm_emit_label (compiler, LABEL_REGION2_LOOP_SMALL);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
 
         // ip = ip - 1
-        orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
+        //orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
         for(i=0;i<(1<<compiler->unroll_shift);i++){
           // NEON loop
           orc_neon_emit_loop (compiler, i);
         }
         // if ??? != ??? goto LABEL_REGION2_LOOP_SMALL
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION2_LOOP_SMALL);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION2_LOOP_SMALL);
 
         // LABEL_REGION2_SKIP:
-        orc_arm_emit_label (compiler, LABEL_REGION2_SKIP);
+        //orc_arm_emit_label (compiler, LABEL_REGION2_SKIP);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
       }
       
       // Loop phase 5
@@ -952,38 +947,52 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
         compiler->vars[align_var].is_aligned = FALSE;
 
         // ip = counter3
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "counter3");
+        //orc_neon_emit_load_reg_token (compiler, ORC_ARM_IP, "counter3");
 
         // if ip == 0 goto LABEL_REGION3_SKIP
-        orc_arm_emit_cmp_imm (compiler, ORC_ARM_IP, 0);
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION3_SKIP);
+        //orc_arm_emit_cmp_imm (compiler, ORC_ARM_IP, 0);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_EQ, LABEL_REGION3_SKIP);
 
         // LABEL_REGION3_LOOP:
-        orc_arm_emit_label (compiler, LABEL_REGION3_LOOP);
+        //orc_arm_emit_label (compiler, LABEL_REGION3_LOOP);
+        ORC_INTRINSIC_CODE (compiler, "for( size_t i = 0; i < counter3; ++i ) {\n");
+        ORC_INTRINSIC_INDENT_INCREASE (compiler);
+
         // ip = ip - 1
-        orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
+        //orc_arm_emit_sub_imm (compiler, ORC_ARM_IP, ORC_ARM_IP, 1, TRUE);
+        
         // NEON loop
         orc_neon_emit_loop (compiler, -1);
+        
         // if ??? != ??? goto LABEL_REGION3_LOOP
-        orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION3_LOOP);
+        //orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_REGION3_LOOP);
+        
         // LABEL_REGION3_SKIP:
-        orc_arm_emit_label (compiler, LABEL_REGION3_SKIP);
+        //orc_arm_emit_label (compiler, LABEL_REGION3_SKIP);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
 
         compiler->loop_shift = save_loop_shift;
       }
 
-      // Loop phase 6
+      // outer loop
       if (compiler->program->is_2d) {
         neon_add_strides (compiler);
+        ORC_INTRINSIC_INDENT_DECREASE (compiler);
+        ORC_INTRINSIC_CODE (compiler, "}\n");
 
-        // a3 = var_a2
-        orc_neon_emit_load_reg_token (compiler, ORC_ARM_A3, "m");
+        /*
+        // a3 = stride_a2
+        orc_arm_emit_load_reg (compiler, ORC_ARM_A3, compiler->exec_reg,
+            (int)ORC_STRUCT_OFFSET(OrcExecutor, params[ORC_VAR_A2]));
         // a3 = a3 - 1
         orc_arm_emit_sub_imm (compiler, ORC_ARM_A3, ORC_ARM_A3, 1, TRUE);
-        // var_a2 = a3
-        orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, "m");
+        // stride_a2 = a3
+        orc_arm_emit_store_reg (compiler, ORC_ARM_A3, compiler->exec_reg,
+            (int)ORC_STRUCT_OFFSET(OrcExecutor,params[ORC_VAR_A2]));
         // if ??? != ??? goto LABEL_OUTER_LOOP
         orc_arm_emit_branch (compiler, ORC_ARM_COND_NE, LABEL_OUTER_LOOP);
+        */
       }
 
       // Postprocessing
@@ -992,6 +1001,7 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
 
         orc_neon_emit_epilogue (compiler);
 
+        /*
         orc_arm_emit_label (compiler, 20);
         orc_arm_emit_data (compiler, 0x07060706);
         orc_arm_emit_data (compiler, 0x07060706);
@@ -999,37 +1009,10 @@ orc_compiler_neon_assemble (OrcCompiler *compiler)
         orc_arm_emit_data (compiler, 0x0f0e0f0e);
 
         orc_arm_do_fixups (compiler);
-      }
-      
-      // Variable tokens
-      ORC_EPILOGUE_CODE (compiler, "  :\n");
-      orc_neon_output_tokens_rw (compiler);
-      
-      // Fixed tokens
-      {
-        // output (write-only)
-        ORC_EPILOGUE_CODE (compiler,
-          "    [counter1] \"+X\" (counter1),\n"
-          "    [counter2] \"+X\" (counter2),\n"
-          "    [counter3] \"+X\" (counter3)\n"
-          );
-        // input (read/write)
-        ORC_EPILOGUE_CODE (compiler, "  :\n");
-        orc_neon_output_tokens_r (compiler);
-        if (compiler->program->is_2d) {
-          ORC_EPILOGUE_CODE (compiler,
-            "    [n] \"X\" (n),\n"
-            "    [m] \"X\" (m)\n"
-            );
-        }
-        else
-        {
-          ORC_EPILOGUE_CODE (compiler,
-            "    [n] \"X\" (n)\n"
-            );
-        }
+        */
       }
     }
+    ORC_INTRINSIC_INDENT_DECREASE (compiler);
   }
   else
   {
@@ -1370,7 +1353,11 @@ orc_neon_emit_loop (OrcCompiler *compiler, int unroll_index)
   OrcStaticOpcode *opcode;
   OrcRule *rule;
 
-  orc_compiler_append_code(compiler,"# LOOP shift %d\n", compiler->loop_shift);
+  if(!compiler->intrinsics) {
+    orc_compiler_append_code(compiler,"# LOOP shift %d\n", compiler->loop_shift);
+  } else {
+    ORC_INTRINSIC_CODE (compiler,"// LOOP shift %d\n", compiler->loop_shift);
+  }
   for(j=0;j<compiler->n_insns;j++){
     compiler->insn_index = j;
     insn = compiler->insns + j;
@@ -1378,7 +1365,11 @@ orc_neon_emit_loop (OrcCompiler *compiler, int unroll_index)
 
     if (insn->flags & ORC_INSN_FLAG_INVARIANT) continue;
 
-    orc_compiler_append_code(compiler,"# %d: %s", j, insn->opcode->name);
+    if(!compiler->intrinsics) {
+      orc_compiler_append_code(compiler,"# %d: %s", j, insn->opcode->name);
+    } else {
+      ORC_INTRINSIC_CODE(compiler,"// %d: %s", j, insn->opcode->name);
+    }
 
     /* set up args */
 #if 0
@@ -1452,16 +1443,23 @@ orc_neon_emit_loop (OrcCompiler *compiler, int unroll_index)
     if (compiler->vars[k].name == NULL) continue;
     if (compiler->vars[k].vartype == ORC_VAR_TYPE_SRC ||
         compiler->vars[k].vartype == ORC_VAR_TYPE_DEST) {
-      if (compiler->vars[k].ptr_register) {
-        orc_arm_emit_add_imm (compiler,
-            compiler->vars[k].ptr_register,
-            compiler->vars[k].ptr_register,
-            compiler->vars[k].size << compiler->loop_shift);
+      if(!compiler->intrinsics) {
+        if (compiler->vars[k].ptr_register) {
+          orc_arm_emit_add_imm (compiler,
+              compiler->vars[k].ptr_register,
+              compiler->vars[k].ptr_register,
+              compiler->vars[k].size << compiler->loop_shift);
+        } else {
+          /* arm_emit_add_imm_memoffset (compiler, arm_ptr_size, */
+          /*     compiler->vars[k].size << compiler->loop_shift, */
+          /*     (int)ORC_STRUCT_OFFSET(OrcExecutor, arrays[k]), */
+          /*     p->exec_reg); */
+        }
       } else {
-        /* arm_emit_add_imm_memoffset (compiler, arm_ptr_size, */
-        /*     compiler->vars[k].size << compiler->loop_shift, */
-        /*     (int)ORC_STRUCT_OFFSET(OrcExecutor, arrays[k]), */
-        /*     p->exec_reg); */
+        ORC_INTRINSIC_CODE (compiler, "a%u += %d;\n",
+          ORC_INTRINSIC_REG((compiler->vars[k].ptr_register)),
+          compiler->vars[k].size << compiler->loop_shift
+        );
       }
     }
   }
@@ -1491,68 +1489,95 @@ orc_neon_save_accumulators (OrcCompiler *compiler)
       case ORC_VAR_TYPE_ACCUMULATOR:
         src = compiler->vars[i].alloc;
 
-        if(compiler->target_flags & ORC_TARGET_C_NOEXEC)
-        {
-          // This variable is a function argument, passed into inline assembly as pointer
-          orc_neon_emit_load_reg_token (compiler, compiler->gp_tmpreg, varnames[i]);
-        }
-        else
+        if(!compiler->intrinsics)
         {
           // gp = &accumulator_i
           orc_arm_emit_load_imm (compiler, compiler->gp_tmpreg,
               ORC_STRUCT_OFFSET(OrcExecutor, accumulators[i-ORC_VAR_A1]));
+          orc_arm_emit_add (compiler, compiler->gp_tmpreg,
+              compiler->gp_tmpreg, compiler->exec_reg);
         }
-        orc_arm_emit_add (compiler, compiler->gp_tmpreg,
-            compiler->gp_tmpreg, compiler->exec_reg);
         switch (var->size) {
           case 2:
             if (compiler->loop_shift > 0) {
-              ORC_ASM_CODE(compiler,"  vpaddl.u16 %s, %s\n",
-                  orc_neon_reg_name (src),
-                  orc_neon_reg_name (src));
-              code = 0xf3b40280;
-              code |= (src&0xf) << 12;
-              code |= ((src>>4)&0x1) << 22;
-              code |= (src&0xf) << 0;
-              orc_arm_emit (compiler, code);
+              if(!compiler->intrinsics) {
+                ORC_ASM_CODE(compiler,"  vpaddl.u16 %s, %s\n",
+                    orc_neon_reg_name (src),
+                    orc_neon_reg_name (src));
+                code = 0xf3b40280;
+                code |= (src&0xf) << 12;
+                code |= ((src>>4)&0x1) << 22;
+                code |= (src&0xf) << 0;
+                orc_arm_emit (compiler, code);
 
-              ORC_ASM_CODE(compiler,"  vpaddl.u32 %s, %s\n",
-                  orc_neon_reg_name (src),
-                  orc_neon_reg_name (src));
-              code = 0xf3b80280;
-              code |= (src&0xf) << 12;
-              code |= ((src>>4)&0x1) << 22;
-              code |= (src&0xf) << 0;
-              orc_arm_emit (compiler, code);
+                ORC_ASM_CODE(compiler,"  vpaddl.u32 %s, %s\n",
+                    orc_neon_reg_name (src),
+                    orc_neon_reg_name (src));
+                code = 0xf3b80280;
+                code |= (src&0xf) << 12;
+                code |= ((src>>4)&0x1) << 22;
+                code |= (src&0xf) << 0;
+                orc_arm_emit (compiler, code);
+              } else {
+                ORC_INTRINSIC_CODE (compiler, "d%u = vpaddl_u16(d%u);\n",
+                  ORC_INTRINSIC_REG((src)),
+                  ORC_INTRINSIC_REG((src))
+                );
+                ORC_INTRINSIC_CODE (compiler, "d%u = vpaddl_u32(d%u);\n",
+                  ORC_INTRINSIC_REG((src)),
+                  ORC_INTRINSIC_REG((src))
+                );
+              }
             }
 
-            ORC_ASM_CODE(compiler,"  vst1.16 %s[%d], [%s]\n",
-                orc_neon_reg_name (src), 0,
-                orc_arm_reg_name (compiler->gp_tmpreg));
-            code = 0xf480040f;
-            code |= (compiler->gp_tmpreg&0xf) << 16;
-            code |= (src&0xf) << 12;
-            code |= ((src>>4)&0x1) << 22;
-            orc_arm_emit (compiler, code);
+            if(!compiler->intrinsics) {
+              ORC_ASM_CODE(compiler,"  vst1.16 %s[%d], [%s]\n",
+                  orc_neon_reg_name (src), 0,
+                  orc_arm_reg_name (compiler->gp_tmpreg));
+              code = 0xf480040f;
+              code |= (compiler->gp_tmpreg&0xf) << 16;
+              code |= (src&0xf) << 12;
+              code |= ((src>>4)&0x1) << 22;
+              orc_arm_emit (compiler, code);
+            } else {
+              ORC_INTRINSIC_CODE (compiler, "vst1_lane_u16(d%u, ex->accumulators[%d]);\n",
+                ORC_INTRINSIC_REG((src)),
+                i-ORC_VAR_A1
+              );
+            }
             break;
           case 4:
             if (compiler->loop_shift > 0) {
-              ORC_ASM_CODE(compiler,"  vpadd.u32 %s, %s, %s\n",
-                  orc_neon_reg_name (src),
-                  orc_neon_reg_name (src),
-                  orc_neon_reg_name (src));
-              code = NEON_BINARY(0xf2200b10, src, src, src);
-              orc_arm_emit (compiler, code);
+              if(!compiler->intrinsics) {
+                ORC_ASM_CODE(compiler,"  vpadd.u32 %s, %s, %s\n",
+                    orc_neon_reg_name (src),
+                    orc_neon_reg_name (src),
+                    orc_neon_reg_name (src));
+                code = NEON_BINARY(0xf2200b10, src, src, src);
+                orc_arm_emit (compiler, code);
+              } else {
+                ORC_INTRINSIC_CODE (compiler, "d%u = vpadd_u32(d%u);\n",
+                  ORC_INTRINSIC_REG((src)),
+                  ORC_INTRINSIC_REG((src))
+                );
+              }
             }
 
-            ORC_ASM_CODE(compiler,"  vst1.32 %s[%d], [%s]\n",
-                orc_neon_reg_name (src), 0,
-                orc_arm_reg_name (compiler->gp_tmpreg));
-            code = 0xf480080f;
-            code |= (compiler->gp_tmpreg&0xf) << 16;
-            code |= (src&0xf) << 12;
-            code |= ((src>>4)&0x1) << 22;
-            orc_arm_emit (compiler, code);
+            if(!compiler->intrinsics) {
+              ORC_ASM_CODE(compiler,"  vst1.32 %s[%d], [%s]\n",
+                  orc_neon_reg_name (src), 0,
+                  orc_arm_reg_name (compiler->gp_tmpreg));
+              code = 0xf480080f;
+              code |= (compiler->gp_tmpreg&0xf) << 16;
+              code |= (src&0xf) << 12;
+              code |= ((src>>4)&0x1) << 22;
+              orc_arm_emit (compiler, code);
+            } else {
+              ORC_INTRINSIC_CODE (compiler, "vst1_lane_u32(d%u, ex->accumulators[%d]);\n",
+                ORC_INTRINSIC_REG((src)),
+                i-ORC_VAR_A1
+              );
+            }
             break;
           default:
             ORC_ERROR("bad size");
@@ -1579,36 +1604,22 @@ neon_add_strides (OrcCompiler *compiler)
         break;
       case ORC_VAR_TYPE_SRC:
       case ORC_VAR_TYPE_DEST:
-        if(compiler->target_flags & ORC_TARGET_C_NOEXEC)
-        {
-          // This function is only ever called in 2d mode, when the _stride function arguments are available.
-
-          // a3 = ptr_i
-          orc_neon_emit_load_reg_token (compiler, ORC_ARM_A3, varnames[i]);
-          // a2 = stride_i
-          orc_neon_emit_load_reg_token_suffix (compiler, ORC_ARM_A2, varnames[i], "stride");
-        }
-        else
-        {
+        if(!compiler->intrinsics) {
           // a3 = ptr_i
           orc_arm_emit_load_reg (compiler, ORC_ARM_A3, compiler->exec_reg,
               (int)ORC_STRUCT_OFFSET(OrcExecutor, arrays[i]));
           // a2 = stride_i
           orc_arm_emit_load_reg (compiler, ORC_ARM_A2, compiler->exec_reg,
               (int)ORC_STRUCT_OFFSET(OrcExecutor, params[i]));
-        }
-        // a3 = a3 + a2
-        orc_arm_emit_add (compiler, ORC_ARM_A3, ORC_ARM_A3, ORC_ARM_A2);
-        if(compiler->target_flags & ORC_TARGET_C_NOEXEC)
-        {
-          // a3 = ptr_i
-          orc_neon_emit_store_reg_token (compiler, ORC_ARM_A3, varnames[i]);
-        }
-        else
-        {
-          // a3 = ptr_i
+
+          // a3 = a3 + a2
+          orc_arm_emit_add (compiler, ORC_ARM_A3, ORC_ARM_A3, ORC_ARM_A2);
+
+          // ptr_i = a3
           orc_arm_emit_store_reg (compiler, ORC_ARM_A3, compiler->exec_reg,
               (int)ORC_STRUCT_OFFSET(OrcExecutor, arrays[i]));
+        } else {
+          ORC_ASM_CODE (compiler, "    ex->arrays[%d] += ex->params[%d];\n", i, i);
         }
         break;
       case ORC_VAR_TYPE_ACCUMULATOR:

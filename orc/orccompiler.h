@@ -19,12 +19,22 @@ typedef struct _OrcFixup OrcFixup;
 #define ORC_ENABLE_ASM_CODE
 #ifdef ORC_ENABLE_ASM_CODE
 #define ORC_ASM_CODE(compiler,...) orc_compiler_append_code(compiler, __VA_ARGS__)
+#define ORC_INTRINSIC_CODE(compiler,code,...) { orc_compiler_append_code(compiler, "%.*s" code, compiler->indent, "                ", ##__VA_ARGS__); compiler->codeptr += 4; }
 #define ORC_PROLOGUE_CODE(compiler,...) orc_compiler_append_prologue_code(compiler, __VA_ARGS__)
 #define ORC_EPILOGUE_CODE(compiler,...) orc_compiler_append_epilogue_code(compiler, __VA_ARGS__)
+
+#define ORC_INTRINSIC_INDENT_INCREASE(compiler) compiler->indent += 2
+#define ORC_INTRINSIC_INDENT_DECREASE(compiler) compiler->indent -= 2
+#define ORC_INTRINSIC_REG(reg) reg
 #else
 #define ORC_ASM_CODE(compiler,...)
+#define ORC_INTRINSIC_CODE(compiler,...)
 #define ORC_PROLOGUE_CODE(compiler,...)
 #define ORC_EPILOGUE_CODE(compiler,...)
+
+#define ORC_INTRINSIC_INDENT_INCREASE(compiler)
+#define ORC_INTRINSIC_INDENT_DECREASE(compiler)
+#define ORC_INTRINSIC_REG(reg)
 #endif
 
 
@@ -73,6 +83,10 @@ struct _OrcCompiler {
   /*< private >*/
   OrcProgram *program;
   OrcTarget *target;
+  
+  int static_assembly;
+  int intrinsics;
+  int variables;
 
   unsigned int target_flags;
 
@@ -145,9 +159,8 @@ struct _OrcCompiler {
   void *output_insns;
   int n_output_insns;
   int n_output_insns_alloc;
-  
-  // static implementation variables
-  int inline_tokens;
+
+  int indent;
 };
 
 

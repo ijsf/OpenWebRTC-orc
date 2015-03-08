@@ -93,7 +93,8 @@ struct _OrcProgram {
 
   OrcCode *orccode;
 
-  int inline_assembly;
+  int static_assembly;
+  int intrinsics;
 
   /* Hide this here.  Belongs in a Parser object */
   char *init_function;

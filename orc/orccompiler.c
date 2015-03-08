@@ -83,47 +83,52 @@ orc_compiler_flag_check (const char *flag)
 int
 orc_compiler_allocate_register (OrcCompiler *compiler, int data_reg)
 {
-  int i;
-  int roff;
-  int reg;
-  int offset;
+  if(!compiler->intrinsics) {
+    int i;
+    int roff;
+    int reg;
+    int offset;
 
-  if (data_reg) {
-    offset = compiler->target->data_register_offset;
+    if (data_reg) {
+      offset = compiler->target->data_register_offset;
+    } else {
+      offset = ORC_GP_REG_BASE;
+    }
+
+    roff = 0;
+    if (_orc_compiler_flag_randomize) {
+      /* for testing */
+      roff = rand()&0x1f;
+    }
+
+    for(i=0;i<32;i++){
+      reg = offset + ((roff + i)&0x1f);
+      if (compiler->valid_regs[reg] &&
+          !compiler->save_regs[reg] &&
+          compiler->alloc_regs[reg] == 0) {
+        compiler->alloc_regs[reg]++;
+        compiler->used_regs[reg] = 1;
+        return reg;
+      }
+    }
+    for(i=0;i<32;i++){
+      reg = offset + ((roff + i)&0x1f);
+      if (compiler->valid_regs[reg] &&
+          compiler->alloc_regs[reg] == 0) {
+        compiler->alloc_regs[reg]++;
+        compiler->used_regs[reg] = 1;
+        return reg;
+      }
+    }
+
+    if (data_reg || !compiler->allow_gp_on_stack) {
+      orc_compiler_error (compiler, "register overflow for %s reg",
+          data_reg ? "vector" : "gp");
+      compiler->result = ORC_COMPILE_RESULT_UNKNOWN_COMPILE;
+    }
   } else {
-    offset = ORC_GP_REG_BASE;
-  }
-
-  roff = 0;
-  if (_orc_compiler_flag_randomize) {
-    /* for testing */
-    roff = rand()&0x1f;
-  }
-
-  for(i=0;i<32;i++){
-    reg = offset + ((roff + i)&0x1f);
-    if (compiler->valid_regs[reg] &&
-        !compiler->save_regs[reg] &&
-        compiler->alloc_regs[reg] == 0) {
-      compiler->alloc_regs[reg]++;
-      compiler->used_regs[reg] = 1;
-      return reg;
-    }
-  }
-  for(i=0;i<32;i++){
-    reg = offset + ((roff + i)&0x1f);
-    if (compiler->valid_regs[reg] &&
-        compiler->alloc_regs[reg] == 0) {
-      compiler->alloc_regs[reg]++;
-      compiler->used_regs[reg] = 1;
-      return reg;
-    }
-  }
-
-  if (data_reg || !compiler->allow_gp_on_stack) {
-    orc_compiler_error (compiler, "register overflow for %s reg",
-        data_reg ? "vector" : "gp");
-    compiler->result = ORC_COMPILE_RESULT_UNKNOWN_COMPILE;
+    // ever increasing "register" allocation
+    return ++compiler->variables;
   }
 
   return 0;
@@ -235,6 +240,14 @@ orc_program_compile_full (OrcProgram *program, OrcTarget *target,
   compiler->program = program;
   compiler->target = target;
   compiler->target_flags = flags;
+  
+  if(program->intrinsics) {
+    compiler->intrinsics = 1;
+  }
+
+  if(program->static_assembly) {
+    compiler->static_assembly = 1;
+  }
 
   {
     ORC_LOG("variables");
@@ -703,6 +716,10 @@ orc_compiler_get_temp_reg (OrcCompiler *compiler)
 {
   int j;
 
+  if(compiler->intrinsics) {
+    orc_compiler_error (compiler, "temporary registers not supported for intrinsics");
+  }
+  
   for(j=0;j<ORC_N_REGS;j++){
     compiler->alloc_regs[j] = 0;
   }
@@ -935,6 +952,7 @@ orc_compiler_rewrite_vars2 (OrcCompiler *compiler)
   int k;
 
   for(j=0;j<compiler->n_insns;j++){
+    if(!compiler->intrinsics) {
 #if 1
     /* must be true to chain src1 to dest:
      *  - rule must handle it
@@ -963,14 +981,15 @@ orc_compiler_rewrite_vars2 (OrcCompiler *compiler)
     }
 #endif
 
-    if (0) {
-      /* immediate operand, don't load */
-      int src2 = compiler->insns[j].src_args[1];
-      compiler->vars[src2].alloc = 1;
-    } else {
-      int src2 = compiler->insns[j].src_args[1];
-      if (src2 != -1 && compiler->vars[src2].alloc == 1) {
-        compiler->vars[src2].alloc = 0;
+      if (0) {
+        /* immediate operand, don't load */
+        int src2 = compiler->insns[j].src_args[1];
+        compiler->vars[src2].alloc = 1;
+      } else {
+        int src2 = compiler->insns[j].src_args[1];
+        if (src2 != -1 && compiler->vars[src2].alloc == 1) {
+          compiler->vars[src2].alloc = 0;
+        }
       }
     }
 
@@ -990,7 +1009,6 @@ orc_compiler_rewrite_vars2 (OrcCompiler *compiler)
       }
     }
   }
-
 }
 
 int
@@ -1218,6 +1236,10 @@ orc_compiler_get_constant_reg (OrcCompiler *compiler)
 {
   int j;
 
+  if(compiler->intrinsics) {
+    orc_compiler_error (compiler, "constant registers not supported for intrinsics");
+  }
+  
   for(j=0;j<ORC_N_REGS;j++){
     compiler->alloc_regs[j] = 0;
   }

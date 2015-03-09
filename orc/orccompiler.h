@@ -70,6 +70,8 @@ struct _OrcCompiler {
   OrcProgram *program;
   OrcTarget *target;
 
+  int static_assembly;
+
   unsigned int target_flags;
 
   OrcInstruction insns[ORC_N_INSNS];

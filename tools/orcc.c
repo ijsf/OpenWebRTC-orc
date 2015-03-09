@@ -14,12 +14,13 @@
 
 static char * read_file (const char *filename);
 void output_code (OrcProgram *p, FILE *output);
+void output_code_static (OrcProgram *p, FILE *output, FILE *output_asm);
 void output_code_header (OrcProgram *p, FILE *output);
 void output_code_test (OrcProgram *p, FILE *output);
 void output_code_backup (OrcProgram *p, FILE *output);
 void output_code_no_orc (OrcProgram *p, FILE *output);
 void output_code_assembly (OrcProgram *p, FILE *output);
-void output_code_execute (OrcProgram *p, FILE *output, int is_inline);
+void output_code_execute (OrcProgram *p, FILE *output, int is_inline, FILE *output_asm);
 void output_program_generation (OrcProgram *p, FILE *output, int is_inline);
 void output_init_function (FILE *output);
 static char * get_barrier (const char *s);
@@ -36,10 +37,11 @@ int use_code = FALSE;
 int use_lazy_init = FALSE;
 int use_backup = TRUE;
 int use_internal = FALSE;
+int use_static = FALSE;
 
 const char *init_function = NULL;
 
-char *target = "sse";
+char *target = "neon";
 
 #define ORC_VERSION(a,b,c,d) ((a)*1000000 + (b)*10000 + (c)*100 + (d))
 #define REQUIRE(a,b,c,d) do { \
@@ -53,7 +55,8 @@ enum {
   MODE_IMPL,
   MODE_HEADER,
   MODE_TEST,
-  MODE_ASSEMBLY
+  MODE_ASSEMBLY,
+  MODE_STATIC_IMPL
 };
 int mode = MODE_IMPL;
 
@@ -82,6 +85,8 @@ void help (void)
   printf("  --init-function FUNCTION  Generate initialization function\n");
   printf("  --lazy-init             Do Orc compile at function execution\n");
   printf("  --no-backup             Do not generate backup functions\n");
+  printf("  --static-implementation Produce statically compiled code\n");
+  printf("  --outputasm FILE        Write assembly output to FILE\n");
   printf("\n");
 
   exit (0);
@@ -94,10 +99,12 @@ main (int argc, char *argv[])
   int n;
   int i;
   char *output_file = NULL;
+  char *output_asm_file = NULL;
   char *input_file = NULL;
   char *include_file = NULL;
   char *compat_version = VERSION;
-  FILE *output;
+  FILE *output = NULL;
+  FILE *output_asm = NULL;
   char *log = NULL;
 
   orc_init ();
@@ -105,6 +112,8 @@ main (int argc, char *argv[])
   for(i=1;i<argc;i++) {
     if (strcmp(argv[i], "--header") == 0) {
       mode = MODE_HEADER;
+    } else if (strcmp(argv[i], "--static-implementation") == 0) {
+      mode = MODE_STATIC_IMPL;
     } else if (strcmp(argv[i], "--implementation") == 0) {
       mode = MODE_IMPL;
     } else if (strcmp(argv[i], "--test") == 0) {
@@ -122,6 +131,13 @@ main (int argc, char *argv[])
         strcmp(argv[i], "-o") == 0) {
       if (i+1 < argc) {
         output_file = argv[i+1];
+        i++;
+      } else {
+        help();
+      }
+    } else if (strcmp (argv[i], "--outputasm") == 0 ) {
+      if (i+1 < argc) {
+        output_asm_file = argv[i+1];
         i++;
       } else {
         help();
@@ -256,6 +272,15 @@ main (int argc, char *argv[])
     use_lazy_init = TRUE;
   }
 
+  if (output_asm_file != NULL) {
+    // output assembly file specified, don't use intrinsics
+    output_asm = fopen(output_asm_file, "w");
+    if (!output_asm) {
+      printf("Could not write output assembly file: %s\n", output_asm_file);
+      exit(1);
+    }
+  }
+
   output = fopen (output_file, "w");
   if (!output) {
     printf("Could not write output file: %s\n", output_file);
@@ -297,6 +322,38 @@ main (int argc, char *argv[])
       output_init_function (output);
       fprintf(output, "\n");
     }
+  } else if (mode == MODE_STATIC_IMPL) {
+    fprintf(output, "#ifdef HAVE_CONFIG_H\n");
+    fprintf(output, "#include \"config.h\"\n");
+    fprintf(output, "#endif\n");
+    if (include_file) {
+      fprintf(output, "#include <%s>\n", include_file);
+    }
+    fprintf(output, "#include <string.h>\n", include_file);
+    fprintf(output, "\n");
+    fprintf(output, "%s", orc_target_c_get_typedefs ());
+    fprintf(output, "\n");
+    fprintf(output, "#ifndef DISABLE_ORC\n");
+    fprintf(output, "#include <orc/orc.h>\n");
+    fprintf(output, "#endif\n");
+    for(i=0;i<n;i++){
+      output_code_header (programs[i], output);
+    }
+    if (init_function) {
+      fprintf(output, "\n");
+      fprintf(output, "void %s (void);\n", init_function);
+    }
+    fprintf(output, "\n");
+    fprintf(output, "%s", orc_target_get_asm_preamble ("c"));
+    fprintf(output, "\n");
+    for(i=0;i<n;i++){
+      output_code_static (programs[i], output, output_asm);
+    }
+    fprintf(output, "\n");
+    if (init_function) {
+      output_init_function (output);
+      fprintf(output, "\n");
+    }
   } else if (mode == MODE_HEADER) {
     char *barrier = get_barrier (output_file);
 
@@ -328,7 +385,7 @@ main (int argc, char *argv[])
       fprintf(output, "#include <orc/orc.h>\n");
       fprintf(output, "\n");
       for(i=0;i<n;i++){
-        output_code_execute (programs[i], output, TRUE);
+        output_code_execute (programs[i], output, TRUE, NULL);
       }
     }
     fprintf(output, "\n");
@@ -419,9 +476,15 @@ main (int argc, char *argv[])
   }
   free(programs);
 
+  if(output_asm) {
+    fclose (output_asm);
+  }
   fclose (output);
 
   if (error) {
+    if(output_asm) {
+      remove (output_asm_file);
+    }
     remove (output_file);
     exit(1);
   }
@@ -824,18 +887,56 @@ output_code (OrcProgram *p, FILE *output)
   if (use_backup) {
     output_code_backup (p, output);
   }
-  output_code_execute (p, output, FALSE);
+  output_code_execute (p, output, FALSE, NULL);
   fprintf(output, "#endif\n");
   fprintf(output, "\n");
 }
 
 void
-output_code_execute (OrcProgram *p, FILE *output, int is_inline)
+output_code_execute (OrcProgram *p, FILE *output, int is_inline, FILE *output_asm)
 {
   OrcVariable *var;
   int i;
 
-  if (!use_lazy_init) {
+  if (use_static) {
+    OrcCompileResult result;
+    OrcTarget *t = orc_target_get_by_name(target);
+
+    fprintf(output, "void _orc_code_%s (OrcExecutor * ex);\n", p->name);
+
+    result = orc_program_compile_full (p, t,
+        orc_target_get_default_flags (t));
+    if (ORC_COMPILE_RESULT_IS_SUCCESSFUL(result)) {
+      if (!output_asm) {
+        fprintf(output, "void\n");
+        fprintf(output, "_orc_code_%s (OrcExecutor * ex)\n", p->name);
+        fprintf(output, "{\n");
+      }
+      fprintf((!output_asm) ? output : output_asm, "%s\n", orc_program_get_asm_code (p));
+      if (!output_asm) {
+        fprintf(output, "}\n");
+      }
+    } else {
+      printf("Failed to compile assembly for '%s', falling back to backup function: %s\n", p->name, orc_program_get_error (p));
+      {
+        orc_program_reset_error (p);
+        OrcCompileResult result;
+
+        result = orc_program_compile_full (p, orc_target_get_by_name("c"),
+            ORC_TARGET_C_BARE);
+        if (ORC_COMPILE_RESULT_IS_SUCCESSFUL(result)) {
+          fprintf(output, "void\n");
+          fprintf(output, "_orc_code_%s (OrcExecutor * ex)\n", p->name);
+          fprintf(output, "{\n");
+          fprintf(output, "%s\n", orc_program_get_asm_code (p));
+          fprintf(output, "}\n");
+        } else {
+          printf("Failed to compile backup code for '%s': %s\n", p->name, orc_program_get_error (p));
+          error = TRUE;
+        }
+      }
+    }
+  } else if (!use_lazy_init) {
     const char *storage;
     if (is_inline) {
       storage = "extern ";
@@ -861,18 +962,23 @@ output_code_execute (OrcProgram *p, FILE *output, int is_inline)
   fprintf(output, "\n");
   fprintf(output, "{\n");
   fprintf(output, "  OrcExecutor _ex, *ex = &_ex;\n");
-  if (!use_lazy_init) {
-    if (use_code) {
-      fprintf(output, "  OrcCode *c = _orc_code_%s;\n", p->name);
-    } else {
-      fprintf(output, "  OrcProgram *p = _orc_program_%s;\n", p->name);
+  if (!use_lazy_init && !use_static) {
+    if (!use_static) {
+      if (use_code) {
+        fprintf(output, "  OrcCode *c = _orc_code_%s;\n", p->name);
+      } else {
+        fprintf(output, "  OrcProgram *p = _orc_program_%s;\n", p->name);
+      }
     }
   } else {
-    fprintf(output, "  static volatile int p_inited = 0;\n");
-    if (use_code) {
-      fprintf(output, "  static OrcCode *c = 0;\n");
-    } else {
-      fprintf(output, "  static OrcProgram *p = 0;\n");
+    if (!use_static) {
+      if (use_code) {
+        fprintf(output, "  static volatile int p_inited = 0;\n");
+        fprintf(output, "  static OrcCode *c = 0;\n");
+      } else {
+        fprintf(output, "  static volatile int p_inited = 0;\n");
+        fprintf(output, "  static OrcProgram *p = 0;\n");
+      }
     }
   }
   fprintf(output, "  void (*func) (OrcExecutor *);\n");
@@ -897,7 +1003,9 @@ output_code_execute (OrcProgram *p, FILE *output, int is_inline)
     fprintf(output, "    orc_once_mutex_unlock ();\n");
     fprintf(output, "  }\n");
   }
-  if (use_code) {
+  if (use_static) {
+    fprintf(output, "  ex->program = 0;\n");
+  } else if (use_code) {
     fprintf(output, "  ex->arrays[ORC_VAR_A2] = c;\n");
     fprintf(output, "  ex->program = 0;\n");
   } else {
@@ -983,7 +1091,9 @@ output_code_execute (OrcProgram *p, FILE *output, int is_inline)
     }
   }
   fprintf(output, "\n");
-  if (use_code) {
+  if (use_static) {
+    fprintf(output, "  func = _orc_code_%s;\n", p->name);
+  } else if (use_code) {
     fprintf(output, "  func = c->exec;\n");
   } else {
     fprintf(output, "  func = p->code_exec;\n");
@@ -1476,6 +1586,30 @@ output_code_assembly (OrcProgram *p, FILE *output)
   }
   fprintf(output, "\n");
 
+}
+
+void
+output_code_static (OrcProgram *p, FILE *output, FILE *output_asm)
+{
+  p->static_assembly = (output_asm != NULL);
+  use_code = TRUE;
+  use_lazy_init = FALSE;
+  use_static = TRUE;
+  
+  if(!p->static_assembly) {
+    printf("Static implementation without specifying output assembly file is not supported\n");
+    error = TRUE;
+    return;
+  }
+  
+  fprintf(output, "\n");
+  fprintf(output, "/* %s (static implementation) */\n", p->name);
+  fprintf(output, "#ifdef DISABLE_ORC\n");
+  output_code_no_orc (p, output);
+  fprintf(output, "#else\n");
+  output_code_execute (p, output, FALSE, output_asm);
+  fprintf(output, "#endif\n");
+  fprintf(output, "\n");
 }
 
 static const char *

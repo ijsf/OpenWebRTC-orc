@@ -297,6 +297,11 @@ orc_program_compile_full (OrcProgram *program, OrcTarget *target,
     }
   }
 #endif
+
+  if(program->static_assembly) {
+    compiler->static_assembly = 1;
+  }
+
   program->orccode = orc_code_new ();
 
   program->orccode->is_2d = program->is_2d;

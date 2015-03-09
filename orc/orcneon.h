@@ -9,6 +9,21 @@ ORC_BEGIN_DECLS
 
 #ifdef ORC_ENABLE_UNSTABLE_API
 
+//
+// 32-bit ARM NEON implementation
+//
+
+// Platform specific macros for OrcExecutor struct offsets
+// NOTE: The hardcoded offsets below assume a 32-bit NEON-capable ARM platform.
+#define NEON_EXECUTOR_PROGRAM() 0
+#define NEON_EXECUTOR_N() 4
+#define NEON_EXECUTOR_COUNTER1() 8
+#define NEON_EXECUTOR_COUNTER2() 12
+#define NEON_EXECUTOR_COUNTER3() 16
+#define NEON_EXECUTOR_ARRAYS(i) (20 + i * 4)
+#define NEON_EXECUTOR_PARAMS(i) (NEON_EXECUTOR_ARRAYS(ORC_N_VARIABLES) + i * 4)
+#define NEON_EXECUTOR_ACCUMULATORS(i) (NEON_EXECUTOR_PARAMS(ORC_N_VARIABLES) + i * 4)
+
 const char *orc_neon_reg_name (int reg);
 const char *orc_neon_reg_name_quad (int reg);
 

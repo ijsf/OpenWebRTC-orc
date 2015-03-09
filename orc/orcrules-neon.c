@@ -1219,7 +1219,7 @@ orc_neon_emit_loadpb (OrcCompiler *compiler, int dest, int param)
   orc_uint32 code;
 
   orc_arm_emit_add_imm (compiler, compiler->gp_tmpreg,
-      compiler->exec_reg, ORC_STRUCT_OFFSET(OrcExecutor, params[param]));
+      compiler->exec_reg, NEON_EXECUTOR_PARAMS(param));
 
   ORC_ASM_CODE(compiler,"  vld1.8 {%s[],%s[]}, [%s]\n",
       orc_neon_reg_name (dest), orc_neon_reg_name (dest+1),
@@ -1237,7 +1237,7 @@ orc_neon_emit_loadpw (OrcCompiler *compiler, int dest, int param)
   orc_uint32 code;
 
   orc_arm_emit_add_imm (compiler, compiler->gp_tmpreg,
-      compiler->exec_reg, ORC_STRUCT_OFFSET(OrcExecutor, params[param]));
+      compiler->exec_reg, NEON_EXECUTOR_PARAMS(param));
 
   ORC_ASM_CODE(compiler,"  vld1.16 {%s[],%s[]}, [%s]\n",
       orc_neon_reg_name (dest), orc_neon_reg_name (dest+1),
@@ -1255,7 +1255,7 @@ orc_neon_emit_loadpl (OrcCompiler *compiler, int dest, int param)
   orc_uint32 code;
 
   orc_arm_emit_add_imm (compiler, compiler->gp_tmpreg,
-      compiler->exec_reg, ORC_STRUCT_OFFSET(OrcExecutor, params[param]));
+      compiler->exec_reg, NEON_EXECUTOR_PARAMS(param));
 
   ORC_ASM_CODE(compiler,"  vld1.32 {%s[],%s[]}, [%s]\n",
       orc_neon_reg_name (dest), orc_neon_reg_name (dest+1),
@@ -1274,7 +1274,7 @@ orc_neon_emit_loadpq (OrcCompiler *compiler, int dest, int param)
   int update = FALSE;
 
   orc_arm_emit_add_imm (compiler, compiler->gp_tmpreg,
-      compiler->exec_reg, ORC_STRUCT_OFFSET(OrcExecutor, params[param]));
+      compiler->exec_reg, NEON_EXECUTOR_PARAMS(param));
 
   ORC_ASM_CODE(compiler,"  vld1.32 %s[0], [%s]%s\n",
       orc_neon_reg_name (dest),
@@ -1303,8 +1303,7 @@ orc_neon_emit_loadpq (OrcCompiler *compiler, int dest, int param)
   orc_arm_emit (compiler, code);
 
   orc_arm_emit_add_imm (compiler, compiler->gp_tmpreg,
-      compiler->exec_reg, ORC_STRUCT_OFFSET(OrcExecutor,
-        params[param + (ORC_VAR_T1-ORC_VAR_P1)]));
+      compiler->exec_reg, NEON_EXECUTOR_PARAMS(param + (ORC_VAR_T1-ORC_VAR_P1)));
 
   ORC_ASM_CODE(compiler,"  vld1.32 %s[1], [%s]%s\n",
       orc_neon_reg_name (dest),
@@ -2261,8 +2260,8 @@ orc_neon_rule_splatw3q (OrcCompiler *p, void *user, OrcInstruction *insn)
   int label = 20;
 
   orc_arm_add_fixup (p, label, 1);
-  ORC_ASM_CODE(p,"  vldr %s, .L%d+%d\n",
-      orc_neon_reg_name (p->tmpreg), label, offset);
+  ORC_ASM_CODE(p,"  vldr %s, L%s%d+%d\n",
+      orc_neon_reg_name (p->tmpreg), p->program->name, label, offset);
   code = 0xed9f0b00;
   code |= (p->tmpreg&0xf) << 12;
   code |= ((p->tmpreg>>4)&0x1) << 22;

@@ -329,7 +329,7 @@ main (int argc, char *argv[])
     if (include_file) {
       fprintf(output, "#include <%s>\n", include_file);
     }
-    fprintf(output, "#include <string.h>\n", include_file);
+    fprintf(output, "#include <%s>\n", include_file);
     fprintf(output, "\n");
     fprintf(output, "%s", orc_target_c_get_typedefs ());
     fprintf(output, "\n");
